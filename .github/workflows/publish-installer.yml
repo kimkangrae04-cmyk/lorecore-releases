@@ -1,0 +1,51 @@
+name: 검증한 Windows 설치 파일 게시
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '버전 (예: 0.1.2-alpha.1)'
+        required: true
+        type: string
+      installer_url:
+        description: '이전 빌드 결과의 일시적인 GitHub 자산 다운로드 주소'
+        required: true
+        type: string
+      sha256:
+        description: '빌드 결과 설치 파일의 SHA-256'
+        required: true
+        type: string
+      notes:
+        description: '릴리스 안내'
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 설치 파일 검증 후 게시
+        env:
+          INSTALLER_URL: ${{ inputs.installer_url }}
+          VERSION: ${{ inputs.version }}
+          EXPECTED_SHA: ${{ inputs.sha256 }}
+          RELEASE_NOTES: ${{ inputs.notes }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$INSTALLER_URL"
+          python3 - <<'PY'
+          import os,re,urllib.parse
+          assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+',os.environ['VERSION'])
+          assert re.fullmatch(r'[0-9a-f]{64}',os.environ['EXPECTED_SHA'])
+          u=urllib.parse.urlsplit(os.environ['INSTALLER_URL'])
+          assert u.scheme=='https' and u.hostname=='release-assets.githubusercontent.com' and not u.username and not u.password and u.port in (None,443)
+          with open('release-notes.md','w') as f: f.write(os.environ['RELEASE_NOTES'])
+          PY
+          name="Lorecore-Setup-$VERSION-x64.exe"
+          curl --fail --location --max-time 600 --max-filesize 536870912 "$INSTALLER_URL" --output "$name"
+          printf '%s  %s\n' "$EXPECTED_SHA" "$name" > "$name.sha256"
+          sha256sum -c "$name.sha256"
+          gh release create "v$VERSION" "$name" "$name.sha256" --repo "$GITHUB_REPOSITORY" --draft --prerelease --title "Lorecore $VERSION" --notes-file release-notes.md
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
